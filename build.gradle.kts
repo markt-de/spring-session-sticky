@@ -16,7 +16,7 @@ repositories {
 }
 
 dependencies {
-  implementation(platform("org.springframework.session:spring-session-bom:Corn-SR1"))
+  implementation(platform("org.springframework.session:spring-session-bom:Corn-SR2"))
   implementation("org.springframework.session:spring-session-core")
   implementation("org.springframework.session:spring-session-data-redis")
 }
