@@ -17,15 +17,20 @@ package org.springframework.session.sticky;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
+import java.util.function.BiConsumer;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.springframework.context.ApplicationEvent;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.session.FlushMode;
 import org.springframework.session.MapSession;
+import org.springframework.session.SaveMode;
 import org.springframework.session.Session;
 import org.springframework.session.SessionRepository;
 import org.springframework.session.events.AbstractSessionEvent;
@@ -33,11 +38,12 @@ import org.springframework.session.events.SessionCreatedEvent;
 import org.springframework.session.events.SessionDeletedEvent;
 import org.springframework.session.events.SessionDestroyedEvent;
 import org.springframework.session.events.SessionExpiredEvent;
+import org.springframework.util.Assert;
 
 /**
  * {@link SessionRepository} implementation that delegates to a (usually remote) session repository, but keeps
  * a local copy of the session in the configured cache.
- *
+ * <p>
  * Supports emitting session events IFF the configured delegate repository emits such events. The local cache will only
  * be cleaned up when the delegate repository emits {@link SessionDestroyedEvent}s.
  *
@@ -47,7 +53,6 @@ import org.springframework.session.events.SessionExpiredEvent;
  * <p>
  * If configured to {@linkplain #setAsyncSaveExecutor(Executor) save session asynchronously}, saving of the delegate
  * session will be dispatched to the configured executor.
- *
  *
  * @author Bernhard Frauendienst
  */
@@ -60,7 +65,7 @@ public final class StickySessionRepository<S extends Session>
 
   private final LastAccessedTimeAccessor lastAccessedTimeAccessor;
 
-  private final Map<String, StickySession> sessionCache;
+  private final Map<String, CacheEntry> sessionCache;
 
   private ApplicationEventPublisher eventPublisher = event -> {
   };
@@ -69,10 +74,14 @@ public final class StickySessionRepository<S extends Session>
 
   private Duration revalidateAfter = null;
 
+  private FlushMode flushMode = FlushMode.ON_SAVE;
+
+  private SaveMode saveMode = SaveMode.ON_SET_ATTRIBUTE;
+
   public <R extends SessionRepository<S>> StickySessionRepository(StickySessionRepositoryAdapter<R> repositoryAdapter,
-      Map<String, StickySession> sessionCache) {
+      int cacheConcurrency) {
     this.delegate = repositoryAdapter.getSessionRepository();
-    this.sessionCache = sessionCache;
+    this.sessionCache = new ConcurrentHashMap<>(16, 0.75F, cacheConcurrency);
 
     if (delegate instanceof LastAccessedTimeAccessor) {
       this.lastAccessedTimeAccessor = (LastAccessedTimeAccessor) delegate;
@@ -102,7 +111,7 @@ public final class StickySessionRepository<S extends Session>
   /**
    * If set to a non-null value, the {@link Session#getLastAccessedTime() lastAccessedTime} will be fetched from the
    * remote repository and compared to the cached value if the cached session is older than {@code revalidateAfter}.
-   *
+   * <p>
    * Set to {@code null} to disable revalidation (then the local copy will always be used if it exists).
    *
    * @param revalidateAfter
@@ -111,23 +120,43 @@ public final class StickySessionRepository<S extends Session>
     this.revalidateAfter = revalidateAfter;
   }
 
+  /**
+   * Sets the flush mode. Default flush mode is {@link FlushMode#ON_SAVE}.
+   *
+   * @param flushMode the flush mode
+   */
+  public void setFlushMode(FlushMode flushMode) {
+    Assert.notNull(flushMode, "flushMode cannot be null");
+    this.flushMode = flushMode;
+  }
+
+  /**
+   * Set the save mode.
+   *
+   * @param saveMode the save mode
+   */
+  public void setSaveMode(SaveMode saveMode) {
+    Assert.notNull(saveMode, "saveMode must not be null");
+    this.saveMode = saveMode;
+  }
+
+  private CacheEntry putCache(S delegate) {
+    CacheEntry entry = new CacheEntry(delegate);
+    sessionCache.put(delegate.getId(), entry);
+    return entry;
+  }
+
   @Override public StickySession createSession() {
     S delegate = this.delegate.createSession();
-    return new StickySession(delegate);
+    return putCache(delegate).createView();
   }
 
   @Override public void save(StickySession session) {
-    sessionCache.put(session.getId(), session);
-    session.delegateAwaitsSave = true;
-    if (asyncSaveExecutor != null) {
-      asyncSaveExecutor.execute(session::saveDelegate);
-    } else {
-      session.saveDelegate();
-    }
+    session.save();
   }
 
   @Override public StickySession findById(String id) {
-    StickySession cached = sessionCache.get(id);
+    CacheEntry cached = sessionCache.get(id);
     if (cached == null || cached.isExpired()) {
       if (cached != null) {
         logger.trace("Removing expired session from cache.");
@@ -137,7 +166,7 @@ public final class StickySessionRepository<S extends Session>
       if (delegate == null) {
         return null;
       }
-      return new StickySession(delegate);
+      return putCache(delegate).createView();
     }
 
     // re-validate if not accessed within the configured period
@@ -177,12 +206,12 @@ public final class StickySessionRepository<S extends Session>
           if (delegate == null) {
             return null;
           }
-          return new StickySession(delegate);
+          return putCache(delegate).createView();
         }
       }
     }
 
-    return cached;
+    return cached.createView();
   }
 
   @Override public void deleteById(String id) {
@@ -190,83 +219,229 @@ public final class StickySessionRepository<S extends Session>
     delegate.deleteById(id);
   }
 
-  public final class StickySession implements Session {
-
-    private final S delegate;
-
+  /**
+   * This class holds a {@link MapSession} entry as well as a matching {@linkplain S delegate session} from the
+   * remote repository.
+   * Entries allow to create "view" sessions that will be saved back to this stored entry (by calling
+   * {@link #saveDelta(Map, Instant, Duration, Session) saveDelta}). This should allows multiple threads to access
+   * the same session entry without concurrency issues or unexpected race conditions.
+   */
+  private final class CacheEntry {
     private final MapSession cached;
+
+    private S delegate;
 
     private boolean delegateAwaitsSave = false;
 
-    public StickySession(S delegate) {
-      this(delegate, new MapSession(delegate));
+    public CacheEntry(S delegate) {
+      this.delegate = delegate;
+      this.cached = new MapSession(delegate);
     }
 
-    public StickySession(S delegate, MapSession cached) {
-      this.delegate = delegate;
-      this.cached = cached;
+    /**
+     * Saves the given session changes to this cache entry.
+     *
+     * @param deltaAttributes     the attributes that have changed in the view
+     * @param lastAccessedTime    the lastAccessedTime if it has changed in the view, {@code null} otherwise
+     * @param maxInactiveInterval the maxInactiveInterval if it has changed in the view, {@code null} otherwise
+     * @param changedIdDelegate   a new delegate if #changeSessionId was called on the view, {@code null} otherwise
+     * @apiNote see {@link StickySession#changeSessionId()} for an explanation why switching delegates is necessary
+     */
+    private synchronized void saveDelta(Map<String, Object> deltaAttributes, Instant lastAccessedTime,
+        Duration maxInactiveInterval, S changedIdDelegate) {
+      if (changedIdDelegate != null) {
+        if (delegateAwaitsSave) {
+          // if the delegate is going to be replaced, but the old one is not saved yet, we have to save it
+          // right now so it does not write to the old session later.
+          saveDelegate();
+        }
+        delegate = changedIdDelegate;
+        cached.setId(changedIdDelegate.getId());
+      }
+
+      deltaAttributes.forEach((attributeName, attributeValue) -> {
+        cached.setAttribute(attributeName, attributeValue);
+        delegate.setAttribute(attributeName, attributeValue);
+      });
+
+      if (lastAccessedTime != null && lastAccessedTime.isAfter(getLastAccessedTime())) {
+        cached.setLastAccessedTime(lastAccessedTime);
+        delegate.setLastAccessedTime(lastAccessedTime);
+      }
+
+      if (maxInactiveInterval != null) {
+        cached.setMaxInactiveInterval(maxInactiveInterval);
+        delegate.setMaxInactiveInterval(maxInactiveInterval);
+      }
+
+      delegateAwaitsSave = true;
+      // if the session id changes, save to delegate session immediately
+      if (asyncSaveExecutor != null && changedIdDelegate == null) {
+        asyncSaveExecutor.execute(this::saveDelegate);
+      } else {
+        this.saveDelegate();
+      }
     }
 
     private synchronized void saveDelegate() {
       if (logger.isDebugEnabled())
-        logger.debug("Saving delegate session " + getId());
+        logger.debug("Saving delegate session " + delegate.getId());
       StickySessionRepository.this.delegate.save(delegate);
       delegateAwaitsSave = false;
     }
 
-    @Override public String getId() {
-      return delegate.getId();
+    private StickySession createView() {
+      return new StickySession(this, new MapSession(cached));
     }
 
-    @Override public synchronized String changeSessionId() {
-      String sessionId = delegate.changeSessionId();
-      cached.setId(sessionId);
-      return sessionId;
+    public boolean isExpired() {
+      return cached.isExpired();
     }
 
-    @Override public <T> T getAttribute(String attributeName) {
-      return cached.getAttribute(attributeName);
-    }
-
-    @Override public Set<String> getAttributeNames() {
-      return cached.getAttributeNames();
-    }
-
-    @Override public synchronized void setAttribute(String attributeName, Object attributeValue) {
-      cached.setAttribute(attributeName, attributeValue);
-      delegate.setAttribute(attributeName, attributeValue);
-    }
-
-    @Override public synchronized  void removeAttribute(String attributeName) {
-      cached.removeAttribute(attributeName);
-      delegate.removeAttribute(attributeName);
-    }
-
-    @Override public Instant getCreationTime() {
-      return cached.getCreationTime();
-    }
-
-    @Override public Instant getLastAccessedTime() {
+    public Instant getLastAccessedTime() {
       return cached.getLastAccessedTime();
     }
+  }
 
-    @Override public synchronized void setLastAccessedTime(Instant lastAccessedTime) {
-      cached.setLastAccessedTime(lastAccessedTime);
-      delegate.setLastAccessedTime(lastAccessedTime);
-    }
+  /**
+   * A custom implementation of {@link Session} that uses a {@link MapSession} as the
+   * basis for its mapping. It keeps track of any attributes that have changed. When
+   * {@link #save()} is invoked all the attributes that have been changed will be
+   * persisted to the owning {@link CacheEntry}.
+   */
+  public final class StickySession implements Session {
 
-    @Override public Duration getMaxInactiveInterval() {
-      return cached.getMaxInactiveInterval();
-    }
+    // keep a reference on our cache entry as long as this session object lives
+    private final CacheEntry cacheEntry;
 
-    @Override public synchronized void setMaxInactiveInterval(Duration interval) {
-      cached.setMaxInactiveInterval(interval);
-      delegate.setMaxInactiveInterval(interval);
+    private final MapSession cached;
+
+    private Map<String, Object> delta = new HashMap<>();
+
+    private Instant originalLastAccessTime;
+
+    private Duration originalMaxInactiveInterval;
+
+    private S changedIdDelegate;
+
+    StickySession(CacheEntry cacheEntry, MapSession cached) {
+      this.cacheEntry = cacheEntry;
+      this.cached = cached;
+      this.originalLastAccessTime = cached.getLastAccessedTime();
+      this.originalMaxInactiveInterval = cached.getMaxInactiveInterval();
+      if (StickySessionRepository.this.saveMode == SaveMode.ALWAYS) {
+        markAllAttributes();
+      }
     }
 
     @Override public boolean isExpired() {
-      return delegate.isExpired();
+      return this.cached.isExpired();
     }
+
+    @Override public Instant getCreationTime() {
+      return this.cached.getCreationTime();
+    }
+
+    @Override public String getId() {
+      return this.cached.getId();
+    }
+
+    @Override public String changeSessionId() {
+      // This one is a bit tricky: since we can't set the id on the delegate session, we must call the delegates
+      // #changeSessionId. However, we don't want to persist that change until #save is called, so we must fetch a new
+      // delegate and call #changeSessionId on that copy. When saving our StickySession, we will exchange the delegate
+      // in the CacheEntry with our changed one.
+      S changedIdDelegate = StickySessionRepository.this.delegate.findById(getId());
+      if (changedIdDelegate == null) {
+        // This is strange, the remote repository does no longer know this session? Let's create a new one.
+        logger.warn("Called changeSessionId on a session unknown to the remote repository (" + getId()
+            + "). Will switch to a new session.");
+        changedIdDelegate = StickySessionRepository.this.delegate.createSession();
+        markAllAttributes();
+      }
+      this.changedIdDelegate = changedIdDelegate;
+
+      String newSessionId = changedIdDelegate.changeSessionId();
+      cached.setId(newSessionId);
+      return newSessionId;
+    }
+
+    @Override public Instant getLastAccessedTime() {
+      return this.cached.getLastAccessedTime();
+    }
+
+    @Override public void setLastAccessedTime(Instant lastAccessedTime) {
+      this.cached.setLastAccessedTime(lastAccessedTime);
+      flushImmediateIfNecessary();
+    }
+
+    @Override public Duration getMaxInactiveInterval() {
+      return this.cached.getMaxInactiveInterval();
+    }
+
+    @Override public void setMaxInactiveInterval(Duration interval) {
+      this.cached.setMaxInactiveInterval(interval);
+      flushImmediateIfNecessary();
+    }
+
+    @Override public <T> T getAttribute(String attributeName) {
+      T attributeValue = this.cached.getAttribute(attributeName);
+      if (attributeValue != null && saveMode.equals(SaveMode.ON_GET_ATTRIBUTE)) {
+        this.delta.put(attributeName, attributeValue);
+      }
+      return attributeValue;
+    }
+
+    @Override public Set<String> getAttributeNames() {
+      return this.cached.getAttributeNames();
+    }
+
+    @Override public void setAttribute(String attributeName, Object attributeValue) {
+      this.cached.setAttribute(attributeName, attributeValue);
+      this.delta.put(attributeName, attributeValue);
+      flushImmediateIfNecessary();
+    }
+
+    @Override public void removeAttribute(String attributeName) {
+      this.cached.removeAttribute(attributeName);
+      this.delta.put(attributeName, null);
+      flushImmediateIfNecessary();
+    }
+
+    private void flushImmediateIfNecessary() {
+      if (StickySessionRepository.this.flushMode == FlushMode.IMMEDIATE) {
+        save();
+      }
+    }
+
+    private void markAllAttributes() {
+      getAttributeNames().forEach((attributeName) -> this.delta.put(attributeName, this.cached.getAttribute(attributeName)));
+    }
+
+    private void save() {
+      final Map<String, Object> delta = this.delta;
+      this.delta = new HashMap<>((int) (delta.size() / 0.75 + 1));
+
+      Instant lastAccessedTime = getLastAccessedTime();
+      if (lastAccessedTime.equals(originalLastAccessTime)) {
+        lastAccessedTime = null;
+      } else {
+        this.originalLastAccessTime = lastAccessedTime;
+      }
+
+      Duration maxInactiveInterval = getMaxInactiveInterval();
+      if (maxInactiveInterval.equals(originalMaxInactiveInterval)) {
+        maxInactiveInterval = null;
+      } else {
+        originalMaxInactiveInterval = maxInactiveInterval;
+      }
+
+      S newDelegate = this.changedIdDelegate;
+      this.changedIdDelegate = null;
+
+      cacheEntry.saveDelta(delta, lastAccessedTime, maxInactiveInterval, newDelegate);
+    }
+
   }
 
   private class EventPublisher implements ApplicationEventPublisher {
@@ -290,13 +465,13 @@ public final class StickySessionRepository<S extends Session>
 
       Session delegateSession = event.getSession();
       if (delegateSession == null) {
-        // AbstractSessionEvent javadocs claims this can happen. AFAICT, the source code says otherwise.
+        // AbstractSessionEvent javadoc claims this can happen. AFAICT, the source code says otherwise.
         logger.warn("Cannot publish " + event.getClass().getSimpleName() + " for session " + event.getSessionId()
-            + ", no cached session found.");
+            + ", no session found.");
         return;
       }
-      StickySession cached = sessionCache.get(event.getSessionId());
-      Session session = cached != null ? cached : delegateSession;
+      CacheEntry cached = sessionCache.get(event.getSessionId());
+      Session session = cached != null ? cached.createView() : delegateSession;
       if (event instanceof SessionCreatedEvent) {
         eventPublisher.publishEvent(new SessionCreatedEvent(StickySessionRepository.this, session));
       } else if (event instanceof SessionDestroyedEvent) {
