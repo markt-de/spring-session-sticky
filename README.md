@@ -1,3 +1,5 @@
+[ ![Download](https://api.bintray.com/packages/markt-de/releases/spring-session-sticky/images/download.svg) ](https://bintray.com/markt-de/releases/spring-session-sticky/_latestVersion)
+
 # Sticky sessions for spring-session
 
 The [spring-session](https://github.com/spring-projects/spring-session/) project
