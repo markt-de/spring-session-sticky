@@ -15,19 +15,23 @@
  */
 package org.springframework.session.sticky;
 
+import static java.util.Comparator.comparing;
+
 import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
+import java.util.SortedSet;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.concurrent.Executor;
-import java.util.function.BiConsumer;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.springframework.context.ApplicationEvent;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.lang.Nullable;
 import org.springframework.session.FlushMode;
 import org.springframework.session.MapSession;
 import org.springframework.session.SaveMode;
@@ -61,18 +65,28 @@ public final class StickySessionRepository<S extends Session>
 
   private static final Log logger = LogFactory.getLog(StickySessionRepository.class);
 
+  public static final int DEFAULT_REVALIDATE_AFTER_SECONDS = 30;
+
+  public static final int DEFAULT_CLEANUP_AFTER_MINUTES = 20;
+
   private final SessionRepository<S> delegate;
 
   private final LastAccessedTimeAccessor lastAccessedTimeAccessor;
 
   private final Map<String, CacheEntry> sessionCache;
 
+  private final CacheCleanup cacheCleanup = new CacheCleanup();
+
   private ApplicationEventPublisher eventPublisher = event -> {
   };
 
+  @Nullable
   private Executor asyncSaveExecutor = null;
 
-  private Duration revalidateAfter = null;
+  @Nullable
+  private Duration revalidateAfter = Duration.ofMinutes(DEFAULT_REVALIDATE_AFTER_SECONDS);
+
+  private Duration cleanupAfter = Duration.ofMinutes(DEFAULT_CLEANUP_AFTER_MINUTES);
 
   private FlushMode flushMode = FlushMode.ON_SAVE;
 
@@ -116,8 +130,22 @@ public final class StickySessionRepository<S extends Session>
    *
    * @param revalidateAfter
    */
-  public void setRevalidateAfter(Duration revalidateAfter) {
+  public void setRevalidateAfter(@Nullable Duration revalidateAfter) {
     this.revalidateAfter = revalidateAfter;
+  }
+
+  /**
+   * Cached session entries that have not been accessed for {@linkplain #cleanupAfter the configured period} will
+   * be removed from the cache (but not the remote store) when {@link #cleanupOutdatedCacheEntries()} is called.
+   *
+   * NOTE: changing this value to a shorter period than before can cause some sessions to be not considered
+   * for removal until the period that was configured when they were created has passed.
+   *
+   * @param cleanupAfter the period after which unaccessed session become considered outdated
+   */
+  public void setCleanupAfter(Duration cleanupAfter) {
+    Assert.notNull(cleanupAfter, "cleanupAfter cannot be null");
+    this.cleanupAfter = cleanupAfter;
   }
 
   /**
@@ -143,7 +171,15 @@ public final class StickySessionRepository<S extends Session>
   private CacheEntry putCache(S delegate) {
     CacheEntry entry = new CacheEntry(delegate);
     sessionCache.put(delegate.getId(), entry);
+    cacheCleanup.schedule(entry);
     return entry;
+  }
+
+  private void removeFromCache(String sessionId) {
+    CacheEntry entry = sessionCache.remove(sessionId);
+    if (entry != null) {
+      cacheCleanup.remove(entry);
+    }
   }
 
   @Override public StickySession createSession() {
@@ -160,7 +196,7 @@ public final class StickySessionRepository<S extends Session>
     if (cached == null || cached.isExpired()) {
       if (cached != null) {
         logger.trace("Removing expired session from cache.");
-        sessionCache.remove(id);
+        removeFromCache(id);
       }
       S delegate = this.delegate.findById(id);
       if (delegate == null) {
@@ -186,20 +222,20 @@ public final class StickySessionRepository<S extends Session>
         // if the delegate repository does not know this session because we have not yet saved it, don't remove it
         if (lastAccessedTime == null && !cached.delegateAwaitsSave) {
           logger.trace("Delegate session is unknown, removing from cache.");
-          sessionCache.remove(id);
+          removeFromCache(id);
           return null;
         }
 
         if (delegate != null && delegate.isExpired()) {
           logger.trace("Delegate session is expired, removing from cache.");
-          sessionCache.remove(id);
+          removeFromCache(id);
           return null;
         }
 
         // if the delegate session is newer than our cache, we need to evict it
         if (lastAccessedTime != null && lastAccessedTime.isAfter(cached.getLastAccessedTime())) {
           logger.trace("Cached session is outdated, removing from cache.");
-          sessionCache.remove(id);
+          removeFromCache(id);
           if (delegate == null) {
             delegate = this.delegate.findById(id);
           }
@@ -215,8 +251,17 @@ public final class StickySessionRepository<S extends Session>
   }
 
   @Override public void deleteById(String id) {
-    sessionCache.remove(id);
+    removeFromCache(id);
     delegate.deleteById(id);
+  }
+
+  /**
+   * Removes all sessions from the cache that have not been accessed for {@link #cleanupAfter}.
+   *
+   * This does not delete sessions, it just removes them from the local cache.
+   */
+  public void cleanupOutdatedCacheEntries() {
+    cacheCleanup.cleanup();
   }
 
   /**
@@ -232,6 +277,8 @@ public final class StickySessionRepository<S extends Session>
     private S delegate;
 
     private boolean delegateAwaitsSave = false;
+
+    private Instant scheduledCleanup = null;
 
     public CacheEntry(S delegate) {
       this.delegate = delegate;
@@ -480,9 +527,44 @@ public final class StickySessionRepository<S extends Session>
         } else if (event instanceof SessionExpiredEvent) {
           eventPublisher.publishEvent(new SessionExpiredEvent(StickySessionRepository.this, session));
         }
-        sessionCache.remove(event.getSessionId());
+        removeFromCache(event.getSessionId());
       } else {
         logger.warn("Unknown event type " + event.getClass());
+      }
+    }
+  }
+
+  private class CacheCleanup {
+
+    private final SortedSet<CacheEntry> scheduledEntries = new ConcurrentSkipListSet<>(comparing(it -> it.scheduledCleanup));
+
+    /**
+     * schedule an entry with a new cleanup date. The entry MUST NOT yet be scheduled.
+     */
+    void schedule(CacheEntry entry) {
+      entry.scheduledCleanup = entry.getLastAccessedTime().plus(cleanupAfter);
+      scheduledEntries.add(entry);
+    }
+
+    void remove(CacheEntry entry) {
+      scheduledEntries.remove(entry);
+    }
+
+    void cleanup() {
+      Instant now = Instant.now();
+      Instant maxLastAccessed = now.minus(cleanupAfter);
+      for (CacheEntry entry : scheduledEntries) {
+        if (entry.scheduledCleanup.isAfter(now)) {
+          // this and all further entries are not due yet
+          break;
+        }
+
+        remove(entry);
+        if (entry.getLastAccessedTime().isBefore(maxLastAccessed)) {
+          removeFromCache(entry.cached.getId());
+        } else {
+          schedule(entry);
+        }
       }
     }
   }
