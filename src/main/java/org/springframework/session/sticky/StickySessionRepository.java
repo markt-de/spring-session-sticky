@@ -167,6 +167,8 @@ public final class StickySessionRepository<S extends Session>
   }
 
   private CacheEntry putCache(S delegate) {
+    if (logger.isTraceEnabled())
+      logger.trace("Adding cache entry for session " + delegate.getId() + ".");
     CacheEntry entry = new CacheEntry(delegate);
     sessionCache.put(delegate.getId(), entry);
     cacheCleanup.schedule(entry);
@@ -193,7 +195,8 @@ public final class StickySessionRepository<S extends Session>
     CacheEntry cached = sessionCache.get(id);
     if (cached == null || cached.isExpired()) {
       if (cached != null) {
-        logger.trace("Removing expired session from cache.");
+        if (logger.isTraceEnabled())
+          logger.trace("Removing expired session " + id + " from cache.");
         removeFromCache(id);
       }
       S delegate = this.delegate.findById(id);
@@ -206,7 +209,8 @@ public final class StickySessionRepository<S extends Session>
     // re-validate if not accessed within the configured period
     if (revalidateAfter != null) {
       if (cached.getLastAccessedTime().isBefore(Instant.now().minus(revalidateAfter))) {
-        logger.trace("Revalidating session against delegate repository.");
+        if (logger.isTraceEnabled())
+          logger.trace("Revalidating session " + id + " against delegate repository.");
         S delegate = null;
         final Instant lastAccessedTime;
         if (lastAccessedTimeAccessor != null) {
@@ -219,20 +223,23 @@ public final class StickySessionRepository<S extends Session>
 
         // if the delegate repository does not know this session because we have not yet saved it, don't remove it
         if (lastAccessedTime == null && !cached.delegateAwaitsSave) {
-          logger.trace("Delegate session is unknown, removing from cache.");
+          if (logger.isTraceEnabled())
+            logger.trace("Delegate session " + id + " is unknown, removing from cache.");
           removeFromCache(id);
           return null;
         }
 
         if (delegate != null && delegate.isExpired()) {
-          logger.trace("Delegate session is expired, removing from cache.");
+          if (logger.isTraceEnabled())
+            logger.trace("Delegate session " + id + " is expired, removing from cache.");
           removeFromCache(id);
           return null;
         }
 
         // if the delegate session is newer than our cache, we need to evict it
         if (lastAccessedTime != null && lastAccessedTime.isAfter(cached.getLastAccessedTime())) {
-          logger.trace("Cached session is outdated, removing from cache.");
+          if (logger.isDebugEnabled())
+            logger.debug("Cached session " + id + " is newer on the remote, removing from cache.");
           removeFromCache(id);
           if (delegate == null) {
             delegate = this.delegate.findById(id);
@@ -249,6 +256,8 @@ public final class StickySessionRepository<S extends Session>
   }
 
   @Override public void deleteById(String id) {
+    if (logger.isDebugEnabled())
+      logger.debug("Deleting session " + id + ".");
     removeFromCache(id);
     delegate.deleteById(id);
   }
@@ -336,7 +345,13 @@ public final class StickySessionRepository<S extends Session>
     }
 
     private StickySession createView() {
+      if (logger.isTraceEnabled())
+        logger.trace("Creating new session view for " + getId());
       return new StickySession(this, new MapSession(cached));
+    }
+
+    public String getId() {
+      return cached.getId();
     }
 
     public boolean isExpired() {
@@ -541,6 +556,8 @@ public final class StickySessionRepository<S extends Session>
      */
     void schedule(CacheEntry entry) {
       entry.scheduledCleanup = entry.getLastAccessedTime().plus(cleanupAfter);
+      if (logger.isTraceEnabled())
+        logger.trace("Scheduling cleanup for session " + entry.getId() + " @ " + entry.scheduledCleanup);
       scheduledEntries.add(entry);
     }
 
@@ -559,7 +576,9 @@ public final class StickySessionRepository<S extends Session>
 
         remove(entry);
         if (entry.getLastAccessedTime().isBefore(maxLastAccessed)) {
-          removeFromCache(entry.cached.getId());
+          if (logger.isDebugEnabled())
+            logger.debug("Cached session " + entry.getId() + " is scheduled for cleanup, removing from cache.");
+          removeFromCache(entry.getId());
         } else {
           schedule(entry);
         }
