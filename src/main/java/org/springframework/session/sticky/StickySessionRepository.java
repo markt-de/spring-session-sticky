@@ -80,11 +80,9 @@ public final class StickySessionRepository<S extends Session>
   private ApplicationEventPublisher eventPublisher = event -> {
   };
 
-  @Nullable
-  private Executor asyncSaveExecutor = null;
+  private @Nullable Executor asyncSaveExecutor = null;
 
-  @Nullable
-  private Duration revalidateAfter = Duration.ofMinutes(DEFAULT_REVALIDATE_AFTER_SECONDS);
+  private @Nullable Duration revalidateAfter = Duration.ofMinutes(DEFAULT_REVALIDATE_AFTER_SECONDS);
 
   private Duration cleanupAfter = Duration.ofMinutes(DEFAULT_CLEANUP_AFTER_MINUTES);
 
@@ -118,7 +116,7 @@ public final class StickySessionRepository<S extends Session>
    *
    * @param asyncSaveExecutor the executor to save delegate sessions with, or {@code null} to disable async saving.
    */
-  public void setAsyncSaveExecutor(Executor asyncSaveExecutor) {
+  public void setAsyncSaveExecutor(@Nullable Executor asyncSaveExecutor) {
     this.asyncSaveExecutor = asyncSaveExecutor;
   }
 
@@ -128,7 +126,7 @@ public final class StickySessionRepository<S extends Session>
    * <p>
    * Set to {@code null} to disable revalidation (then the local copy will always be used if it exists).
    *
-   * @param revalidateAfter
+   * @param revalidateAfter duration after which to revalidate cached sessions, or {@code null} to disable revalidation
    */
   public void setRevalidateAfter(@Nullable Duration revalidateAfter) {
     this.revalidateAfter = revalidateAfter;
@@ -191,7 +189,7 @@ public final class StickySessionRepository<S extends Session>
     session.save();
   }
 
-  @Override public StickySession findById(String id) {
+  @Override public @Nullable StickySession findById(String id) {
     CacheEntry cached = sessionCache.get(id);
     if (cached == null || cached.isExpired()) {
       if (cached != null) {
@@ -294,8 +292,8 @@ public final class StickySessionRepository<S extends Session>
      * @param changedIdDelegate   a new delegate if #changeSessionId was called on the view, {@code null} otherwise
      * @apiNote see {@link StickySession#changeSessionId()} for an explanation why switching delegates is necessary
      */
-    private synchronized void saveDelta(Map<String, Object> deltaAttributes, Instant lastAccessedTime,
-        Duration maxInactiveInterval, S changedIdDelegate) {
+    private synchronized void saveDelta(Map<String, Object> deltaAttributes, @Nullable Instant lastAccessedTime,
+        @Nullable Duration maxInactiveInterval, @Nullable S changedIdDelegate) {
       if (changedIdDelegate != null) {
         if (delegateAwaitsSave) {
           // if the delegate is going to be replaced, but the old one is not saved yet, we have to save it
@@ -369,7 +367,7 @@ public final class StickySessionRepository<S extends Session>
 
     private Duration originalMaxInactiveInterval;
 
-    private S changedIdDelegate;
+    private @Nullable S changedIdDelegate;
 
     StickySession(CacheEntry cacheEntry, MapSession cached) {
       this.cacheEntry = cacheEntry;
@@ -431,7 +429,7 @@ public final class StickySessionRepository<S extends Session>
       flushImmediateIfNecessary();
     }
 
-    @Override public <T> T getAttribute(String attributeName) {
+    @Override @Nullable public <T> T getAttribute(String attributeName) {
       T attributeValue = this.cached.getAttribute(attributeName);
       if (attributeValue != null && saveMode.equals(SaveMode.ON_GET_ATTRIBUTE)) {
         this.delta.put(attributeName, attributeValue);

@@ -20,6 +20,7 @@ import java.time.Instant;
 import org.springframework.context.ApplicationEventPublisher;
 
 import org.springframework.data.redis.core.BoundHashOperations;
+import org.springframework.lang.Nullable;
 import org.springframework.session.Session;
 import org.springframework.session.sticky.LastAccessedTimeAccessor;
 import org.springframework.session.sticky.StickySessionRepositoryAdapter;
@@ -50,7 +51,8 @@ public class StickyRedisSessionRepositoryAdapter
     repository.setApplicationEventPublisher(eventPublisher);
   }
 
-  @Override public Instant getLastAccessedTime(String sessionId) {
+  @Override
+  public @Nullable Instant getLastAccessedTime(String sessionId) {
     String sessionKey = repository.getSessionKey(sessionId);
     BoundHashOperations<Object, Object, Object> hashOps = repository.getSessionRedisOperations().boundHashOps(sessionKey);
     Long lastAccessedTime = (Long) hashOps.get(RedisSessionMapper.LAST_ACCESSED_TIME_KEY);

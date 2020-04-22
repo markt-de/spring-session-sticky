@@ -17,6 +17,7 @@ package org.springframework.session.sticky;
 
 import java.time.Instant;
 
+import org.springframework.lang.Nullable;
 import org.springframework.session.Session;
 
 /**
@@ -33,5 +34,5 @@ public interface LastAccessedTimeAccessor {
    * @param sessionId
    * @return the lastAccessedTime if the session exists, {@code null} otherwise
    */
-  Instant getLastAccessedTime(String sessionId);
+  @Nullable Instant getLastAccessedTime(String sessionId);
 }
