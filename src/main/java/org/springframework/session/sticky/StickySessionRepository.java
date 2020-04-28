@@ -22,9 +22,6 @@ import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
-import java.util.SortedSet;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.concurrent.Executor;
 
 import org.apache.commons.logging.Log;
@@ -60,22 +57,18 @@ import org.springframework.util.Assert;
  *
  * @author Bernhard Frauendienst
  */
-public final class StickySessionRepository<S extends Session>
-    implements SessionRepository<StickySessionRepository<S>.StickySession> {
+public final class StickySessionRepository
+    implements SessionRepository<StickySessionRepository.StickySession> {
 
   private static final Log logger = LogFactory.getLog(StickySessionRepository.class);
 
   public static final int DEFAULT_REVALIDATE_AFTER_SECONDS = 30;
 
-  public static final int DEFAULT_CLEANUP_AFTER_MINUTES = 20;
-
-  private final SessionRepository<S> delegate;
+  private final SessionRepository<?> delegate;
 
   private final LastAccessedTimeAccessor lastAccessedTimeAccessor;
 
-  private final Map<String, CacheEntry> sessionCache;
-
-  private final CacheCleanup cacheCleanup = new CacheCleanup();
+  private final StickySessionCache sessionCache;
 
   private ApplicationEventPublisher eventPublisher = event -> {
   };
@@ -84,16 +77,14 @@ public final class StickySessionRepository<S extends Session>
 
   private @Nullable Duration revalidateAfter = Duration.ofMinutes(DEFAULT_REVALIDATE_AFTER_SECONDS);
 
-  private Duration cleanupAfter = Duration.ofMinutes(DEFAULT_CLEANUP_AFTER_MINUTES);
-
   private FlushMode flushMode = FlushMode.ON_SAVE;
 
   private SaveMode saveMode = SaveMode.ON_SET_ATTRIBUTE;
 
-  public <R extends SessionRepository<S>> StickySessionRepository(StickySessionRepositoryAdapter<R> repositoryAdapter,
-      int cacheConcurrency) {
+  public StickySessionRepository(StickySessionRepositoryAdapter<? extends SessionRepository<?>> repositoryAdapter,
+      StickySessionCache sessionCache) {
     this.delegate = repositoryAdapter.getSessionRepository();
-    this.sessionCache = new ConcurrentHashMap<>(16, 0.75F, cacheConcurrency);
+    this.sessionCache = sessionCache;
 
     if (delegate instanceof LastAccessedTimeAccessor) {
       this.lastAccessedTimeAccessor = (LastAccessedTimeAccessor) delegate;
@@ -133,20 +124,6 @@ public final class StickySessionRepository<S extends Session>
   }
 
   /**
-   * Cached session entries that have not been accessed for {@linkplain #cleanupAfter the configured period} will
-   * be removed from the cache (but not the remote store) when {@link #cleanupOutdatedCacheEntries()} is called.
-   *
-   * NOTE: changing this value to a shorter period than before can cause some sessions to be not considered
-   * for removal until the period that was configured when they were created has passed.
-   *
-   * @param cleanupAfter the period after which unaccessed session become considered outdated
-   */
-  public void setCleanupAfter(Duration cleanupAfter) {
-    Assert.notNull(cleanupAfter, "cleanupAfter cannot be null");
-    this.cleanupAfter = cleanupAfter;
-  }
-
-  /**
    * Sets the flush mode. Default flush mode is {@link FlushMode#ON_SAVE}.
    *
    * @param flushMode the flush mode
@@ -166,24 +143,16 @@ public final class StickySessionRepository<S extends Session>
     this.saveMode = saveMode;
   }
 
-  private CacheEntry putCache(S delegate) {
+  private CacheEntry putCache(Session delegate) {
     if (logger.isTraceEnabled())
       logger.trace("Adding cache entry for session " + delegate.getId() + ".");
     CacheEntry entry = new CacheEntry(delegate);
     sessionCache.put(delegate.getId(), entry);
-    cacheCleanup.schedule(entry);
     return entry;
   }
 
-  private void removeFromCache(String sessionId) {
-    CacheEntry entry = sessionCache.remove(sessionId);
-    if (entry != null) {
-      cacheCleanup.remove(entry);
-    }
-  }
-
   @Override public StickySession createSession() {
-    S delegate = this.delegate.createSession();
+    Session delegate = this.delegate.createSession();
     return putCache(delegate).createView();
   }
 
@@ -197,9 +166,9 @@ public final class StickySessionRepository<S extends Session>
       if (cached != null) {
         if (logger.isTraceEnabled())
           logger.trace("Removing expired session " + id + " from cache.");
-        removeFromCache(id);
+        sessionCache.remove(id);
       }
-      S delegate = this.delegate.findById(id);
+      Session delegate = this.delegate.findById(id);
       if (delegate == null) {
         return null;
       }
@@ -211,7 +180,7 @@ public final class StickySessionRepository<S extends Session>
       if (cached.getLastAccessedTime().isBefore(Instant.now().minus(revalidateAfter))) {
         if (logger.isTraceEnabled())
           logger.trace("Revalidating session " + id + " against delegate repository.");
-        S delegate = null;
+        Session delegate = null;
         final Instant lastAccessedTime;
         if (lastAccessedTimeAccessor != null) {
           // if we can get the lastAccessedTime without loading the session, let's try to be efficient
@@ -225,14 +194,14 @@ public final class StickySessionRepository<S extends Session>
         if (lastAccessedTime == null && !cached.delegateAwaitsSave) {
           if (logger.isTraceEnabled())
             logger.trace("Delegate session " + id + " is unknown, removing from cache.");
-          removeFromCache(id);
+          sessionCache.remove(id);
           return null;
         }
 
         if (delegate != null && delegate.isExpired()) {
           if (logger.isTraceEnabled())
             logger.trace("Delegate session " + id + " is expired, removing from cache.");
-          removeFromCache(id);
+          sessionCache.remove(id);
           return null;
         }
 
@@ -240,7 +209,7 @@ public final class StickySessionRepository<S extends Session>
         if (lastAccessedTime != null && lastAccessedTime.isAfter(cached.getLastAccessedTime())) {
           if (logger.isDebugEnabled())
             logger.debug("Cached session " + id + " is newer on the remote, removing from cache.");
-          removeFromCache(id);
+          sessionCache.remove(id);
           if (delegate == null) {
             delegate = this.delegate.findById(id);
           }
@@ -258,36 +227,25 @@ public final class StickySessionRepository<S extends Session>
   @Override public void deleteById(String id) {
     if (logger.isDebugEnabled())
       logger.debug("Deleting session " + id + ".");
-    removeFromCache(id);
+    sessionCache.remove(id);
     delegate.deleteById(id);
   }
 
   /**
-   * Removes all sessions from the cache that have not been accessed for {@link #cleanupAfter}.
-   *
-   * This does not delete sessions, it just removes them from the local cache.
-   */
-  public void cleanupOutdatedCacheEntries() {
-    cacheCleanup.cleanup();
-  }
-
-  /**
-   * This class holds a {@link MapSession} entry as well as a matching {@linkplain S delegate session} from the
+   * This class holds a {@link MapSession} entry as well as a matching {@linkplain Session delegate session} from the
    * remote repository.
    * Entries allow to create "view" sessions that will be saved back to this stored entry (by calling
    * {@link #saveDelta(Map, Instant, Duration, Session) saveDelta}). This should allows multiple threads to access
    * the same session entry without concurrency issues or unexpected race conditions.
    */
-  private final class CacheEntry {
+  public final class CacheEntry {
     private final MapSession cached;
 
-    private S delegate;
+    private Session delegate;
 
     private boolean delegateAwaitsSave = false;
 
-    private Instant scheduledCleanup = null;
-
-    public CacheEntry(S delegate) {
+    CacheEntry(Session delegate) {
       this.delegate = delegate;
       this.cached = new MapSession(delegate);
     }
@@ -302,7 +260,7 @@ public final class StickySessionRepository<S extends Session>
      * @apiNote see {@link StickySession#changeSessionId()} for an explanation why switching delegates is necessary
      */
     private synchronized void saveDelta(Map<String, Object> deltaAttributes, @Nullable Instant lastAccessedTime,
-        @Nullable Duration maxInactiveInterval, @Nullable S changedIdDelegate) {
+        @Nullable Duration maxInactiveInterval, @Nullable Session changedIdDelegate) {
       if (changedIdDelegate != null) {
         if (delegateAwaitsSave) {
           // if the delegate is going to be replaced, but the old one is not saved yet, we have to save it
@@ -340,7 +298,9 @@ public final class StickySessionRepository<S extends Session>
     private synchronized void saveDelegate() {
       if (logger.isDebugEnabled())
         logger.debug("Saving delegate session " + delegate.getId());
-      StickySessionRepository.this.delegate.save(delegate);
+      @SuppressWarnings("unchecked") // if we don't do this here, we need to to it in a lot of other places
+      SessionRepository<Session> delegateRepository = (SessionRepository<Session>) StickySessionRepository.this.delegate;
+      delegateRepository.save(delegate);
       delegateAwaitsSave = false;
     }
 
@@ -382,7 +342,7 @@ public final class StickySessionRepository<S extends Session>
 
     private Duration originalMaxInactiveInterval;
 
-    private @Nullable S changedIdDelegate;
+    private @Nullable Session changedIdDelegate;
 
     StickySession(CacheEntry cacheEntry, MapSession cached) {
       this.cacheEntry = cacheEntry;
@@ -411,7 +371,7 @@ public final class StickySessionRepository<S extends Session>
       // #changeSessionId. However, we don't want to persist that change until #save is called, so we must fetch a new
       // delegate and call #changeSessionId on that copy. When saving our StickySession, we will exchange the delegate
       // in the CacheEntry with our changed one.
-      S changedIdDelegate = StickySessionRepository.this.delegate.findById(getId());
+      Session changedIdDelegate = StickySessionRepository.this.delegate.findById(getId());
       if (changedIdDelegate == null) {
         // This is strange, the remote repository does no longer know this session? Let's create a new one.
         logger.warn("Called changeSessionId on a session unknown to the remote repository (" + getId()
@@ -496,7 +456,7 @@ public final class StickySessionRepository<S extends Session>
         originalMaxInactiveInterval = maxInactiveInterval;
       }
 
-      S newDelegate = this.changedIdDelegate;
+      Session newDelegate = this.changedIdDelegate;
       this.changedIdDelegate = null;
 
       cacheEntry.saveDelta(delta, lastAccessedTime, maxInactiveInterval, newDelegate);
@@ -540,48 +500,9 @@ public final class StickySessionRepository<S extends Session>
         } else if (event instanceof SessionExpiredEvent) {
           eventPublisher.publishEvent(new SessionExpiredEvent(StickySessionRepository.this, session));
         }
-        removeFromCache(event.getSessionId());
+        sessionCache.remove(event.getSessionId());
       } else {
         logger.warn("Unknown event type " + event.getClass());
-      }
-    }
-  }
-
-  private class CacheCleanup {
-
-    private final SortedSet<CacheEntry> scheduledEntries = new ConcurrentSkipListSet<>(comparing(it -> it.scheduledCleanup));
-
-    /**
-     * schedule an entry with a new cleanup date. The entry MUST NOT yet be scheduled.
-     */
-    void schedule(CacheEntry entry) {
-      entry.scheduledCleanup = entry.getLastAccessedTime().plus(cleanupAfter);
-      if (logger.isTraceEnabled())
-        logger.trace("Scheduling cleanup for session " + entry.getId() + " @ " + entry.scheduledCleanup);
-      scheduledEntries.add(entry);
-    }
-
-    void remove(CacheEntry entry) {
-      scheduledEntries.remove(entry);
-    }
-
-    void cleanup() {
-      Instant now = Instant.now();
-      Instant maxLastAccessed = now.minus(cleanupAfter);
-      for (CacheEntry entry : scheduledEntries) {
-        if (entry.scheduledCleanup.isAfter(now)) {
-          // this and all further entries are not due yet
-          break;
-        }
-
-        remove(entry);
-        if (entry.getLastAccessedTime().isBefore(maxLastAccessed)) {
-          if (logger.isDebugEnabled())
-            logger.debug("Cached session " + entry.getId() + " is scheduled for cleanup, removing from cache.");
-          removeFromCache(entry.getId());
-        } else {
-          schedule(entry);
-        }
       }
     }
   }

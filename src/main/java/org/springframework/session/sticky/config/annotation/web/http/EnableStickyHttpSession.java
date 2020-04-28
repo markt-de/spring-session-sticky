@@ -31,6 +31,7 @@ import org.springframework.session.Session;
 import org.springframework.session.SessionRepository;
 import org.springframework.session.config.annotation.web.http.EnableSpringHttpSession;
 import org.springframework.session.data.redis.config.annotation.web.http.EnableRedisHttpSession;
+import org.springframework.session.sticky.StickySessionCache;
 import org.springframework.session.sticky.StickySessionRepository;
 import org.springframework.session.sticky.StickySessionRepositoryAdapter;
 
@@ -90,7 +91,7 @@ public @interface EnableStickyHttpSession {
 	 *
 	 * @return the number of minutes after which a session should become oudated if it has not been accessed
 	 */
-	int cleanupAfterMinutes() default StickySessionRepository.DEFAULT_CLEANUP_AFTER_MINUTES;
+	int cleanupAfterMinutes() default StickySessionCache.DEFAULT_CLEANUP_AFTER_MINUTES;
 
 	/**
 	 * If set to a positive value, a {@linkplain java.util.concurrent.Executors#newFixedThreadPool(int) fixed thread pool}

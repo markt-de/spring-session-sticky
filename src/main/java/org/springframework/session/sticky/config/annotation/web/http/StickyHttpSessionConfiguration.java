@@ -15,7 +15,7 @@
  */
 package org.springframework.session.sticky.config.annotation.web.http;
 
-import static org.springframework.session.sticky.StickySessionRepository.DEFAULT_CLEANUP_AFTER_MINUTES;
+import static org.springframework.session.sticky.StickySessionCache.DEFAULT_CLEANUP_AFTER_MINUTES;
 import static org.springframework.session.sticky.StickySessionRepository.DEFAULT_REVALIDATE_AFTER_SECONDS;
 
 import java.time.Duration;
@@ -38,6 +38,7 @@ import org.springframework.scheduling.config.ScheduledTaskRegistrar;
 import org.springframework.session.FlushMode;
 import org.springframework.session.SaveMode;
 import org.springframework.session.SessionRepository;
+import org.springframework.session.sticky.StickySessionCache;
 import org.springframework.session.sticky.StickySessionRepository;
 import org.springframework.session.sticky.StickySessionRepositoryAdapter;
 import org.springframework.util.Assert;
@@ -116,13 +117,21 @@ public class StickyHttpSessionConfiguration implements ImportAware {
     return Executors.newFixedThreadPool(16);
   }
 
+  @Bean
+  public StickySessionCache stickySessionCache() {
+    StickySessionCache cache = new StickySessionCache(this.cacheConcurrency);
+    cache.setCleanupAfter(this.cleanupAfter);
+    return cache;
+  }
+
   @Primary
   @Bean
-  public StickySessionRepository<?> stickySessionRepository(
-      StickySessionRepositoryAdapter<? extends SessionRepository<?>> stickySessionRepositoryAdapter) {
-    @SuppressWarnings("rawtypes") // if we add a type parameter, this bean won't get autowired
-        // might be solved with https://github.com/spring-projects/spring-framework/issues/24965
-    StickySessionRepository<?> sessionRepository = new StickySessionRepository(stickySessionRepositoryAdapter, this.cacheConcurrency);
+  public StickySessionRepository stickySessionRepository(
+      StickySessionRepositoryAdapter<? extends SessionRepository<?>> stickySessionRepositoryAdapter,
+      StickySessionCache stickySessionCache) {
+    // if we add a type parameter for the remote Session type, this bean won't get autowired
+    // might be solved with https://github.com/spring-projects/spring-framework/issues/24965
+    StickySessionRepository sessionRepository = new StickySessionRepository(stickySessionRepositoryAdapter, stickySessionCache);
 
     sessionRepository.setFlushMode(this.flushMode);
     sessionRepository.setSaveMode(this.saveMode);
@@ -134,7 +143,6 @@ public class StickyHttpSessionConfiguration implements ImportAware {
       this.asyncSaveExecutor = createDefaultAsyncSaveExecutor();
     }
     sessionRepository.setRevalidateAfter(this.revalidateAfter);
-    sessionRepository.setCleanupAfter(this.cleanupAfter);
     return sessionRepository;
   }
 
@@ -172,15 +180,15 @@ public class StickyHttpSessionConfiguration implements ImportAware {
   @Configuration(proxyBeanMethods = false)
   class SessionCleanupConfiguration implements SchedulingConfigurer {
 
-    private final StickySessionRepository<?> sessionRepository;
+    private final StickySessionCache sessionCache;
 
-    SessionCleanupConfiguration(StickySessionRepository<?> sessionRepository) {
-      this.sessionRepository = sessionRepository;
+    SessionCleanupConfiguration(StickySessionCache sessionCache) {
+      this.sessionCache = sessionCache;
     }
 
     @Override
     public void configureTasks(ScheduledTaskRegistrar taskRegistrar) {
-      taskRegistrar.addCronTask(this.sessionRepository::cleanupOutdatedCacheEntries,
+      taskRegistrar.addCronTask(this.sessionCache::cleanupOutdatedCacheEntries,
           StickyHttpSessionConfiguration.this.cacheCleanupCron);
     }
 
