@@ -147,7 +147,7 @@ public final class StickySessionRepository
     if (logger.isTraceEnabled())
       logger.trace("Adding cache entry for session " + delegate.getId() + ".");
     CacheEntry entry = new CacheEntry(delegate);
-    sessionCache.put(delegate.getId(), entry);
+    sessionCache.put(entry);
     return entry;
   }
 
@@ -261,6 +261,7 @@ public final class StickySessionRepository
      */
     private synchronized void saveDelta(Map<String, Object> deltaAttributes, @Nullable Instant lastAccessedTime,
         @Nullable Duration maxInactiveInterval, @Nullable Session changedIdDelegate) {
+      String originalSessionId = getId();
       if (changedIdDelegate != null) {
         if (delegateAwaitsSave) {
           // if the delegate is going to be replaced, but the old one is not saved yet, we have to save it
@@ -284,6 +285,11 @@ public final class StickySessionRepository
       if (maxInactiveInterval != null) {
         cached.setMaxInactiveInterval(maxInactiveInterval);
         delegate.setMaxInactiveInterval(maxInactiveInterval);
+      }
+
+      if (changedIdDelegate != null) {
+        sessionCache.remove(originalSessionId);
+        sessionCache.put(this);
       }
 
       delegateAwaitsSave = true;

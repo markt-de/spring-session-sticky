@@ -69,10 +69,9 @@ public class StickySessionCache {
     return sessions.get(id);
   }
 
-  public void put(String id, CacheEntry entry) {
-    sessions.put(id, entry);
+  public void put(CacheEntry entry) {
+    sessions.put(entry.getId(), entry);
     cacheCleanup.schedule(entry);
-
   }
 
   @Nullable
