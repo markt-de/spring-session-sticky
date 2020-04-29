@@ -304,7 +304,7 @@ public final class StickySessionRepository
       delegateAwaitsSave = false;
     }
 
-    private StickySession createView() {
+    private synchronized StickySession createView() {
       if (logger.isTraceEnabled())
         logger.trace("Creating new session view for " + getId());
       return new StickySession(this, new MapSession(cached));
