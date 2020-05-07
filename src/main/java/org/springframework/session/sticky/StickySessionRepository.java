@@ -399,10 +399,12 @@ public final class StickySessionRepository
       // #changeSessionId. However, we don't want to persist that change until #save is called, so we must fetch a new
       // delegate and call #changeSessionId on that copy. When saving our StickySession, we will exchange the delegate
       // in the CacheEntry with our changed one.
-      Session changedIdDelegate = StickySessionRepository.this.delegate.findById(getId());
+      cacheEntry.saveDelegate();
+      final String id = getId();
+      Session changedIdDelegate = StickySessionRepository.this.delegate.findById(id);
       if (changedIdDelegate == null) {
-        // This is strange, the remote repository does no longer know this session? Let's create a new one.
-        logger.warn("Called changeSessionId on a session unknown to the remote repository (" + getId()
+        // This is strange, the remote repository does not know this session? Let's create a new one.
+        logger.warn("Called changeSessionId on a session unknown to the remote repository (" + id
             + "). Will switch to a new session.");
         changedIdDelegate = StickySessionRepository.this.delegate.createSession();
         markAllAttributes();
@@ -411,6 +413,10 @@ public final class StickySessionRepository
 
       String newSessionId = changedIdDelegate.changeSessionId();
       cached.setId(newSessionId);
+
+      if (logger.isDebugEnabled())
+        logger.debug("Session changed its id from " + id + " to " + newSessionId + ".");
+
       return newSessionId;
     }
 
