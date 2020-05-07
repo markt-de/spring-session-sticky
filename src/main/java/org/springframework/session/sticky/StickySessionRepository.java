@@ -318,6 +318,12 @@ public final class StickySessionRepository
     }
 
     private synchronized void saveDelegate() {
+      if (!delegateAwaitsSave) {
+        if (logger.isTraceEnabled()) {
+          logger.trace("Delegate session " + delegate.getId() + " does not need saving.");
+        }
+        return;
+      }
       if (logger.isDebugEnabled())
         logger.debug("Saving delegate session " + delegate.getId());
       @SuppressWarnings("unchecked") // if we don't do this here, we need to to it in a lot of other places
