@@ -175,53 +175,56 @@ public final class StickySessionRepository
       return putCache(delegate).createView();
     }
 
-    // re-validate if not accessed within the configured period
-    if (revalidateAfter != null) {
-      if (cached.getLastAccessedTime().isBefore(Instant.now().minus(revalidateAfter))) {
-        if (logger.isTraceEnabled())
-          logger.trace("Revalidating session " + id + " against delegate repository.");
-        Session delegate = null;
-        final Instant lastAccessedTime;
-        if (lastAccessedTimeAccessor != null) {
-          // if we can get the lastAccessedTime without loading the session, let's try to be efficient
-          lastAccessedTime = lastAccessedTimeAccessor.getLastAccessedTime(id);
-        } else {
-          delegate = this.delegate.findById(id);
-          lastAccessedTime = delegate != null ? delegate.getLastAccessedTime() : null;
-        }
-
-        // if the delegate repository does not know this session because we have not yet saved it, don't remove it
-        if (lastAccessedTime == null && !cached.delegateAwaitsSave) {
-          if (logger.isTraceEnabled())
-            logger.trace("Delegate session " + id + " is unknown, removing from cache.");
-          sessionCache.remove(id);
-          return null;
-        }
-
-        if (delegate != null && delegate.isExpired()) {
-          if (logger.isTraceEnabled())
-            logger.trace("Delegate session " + id + " is expired, removing from cache.");
-          sessionCache.remove(id);
-          return null;
-        }
-
-        // if the delegate session is newer than our cache, we need to evict it
-        if (lastAccessedTime != null && lastAccessedTime.isAfter(cached.getLastAccessedTime())) {
-          if (logger.isDebugEnabled())
-            logger.debug("Cached session " + id + " is newer on the remote, removing from cache.");
-          sessionCache.remove(id);
-          if (delegate == null) {
-            delegate = this.delegate.findById(id);
-          }
-          if (delegate == null) {
-            return null;
-          }
-          return putCache(delegate).createView();
-        }
-      }
+    if (revalidateAfter == null || !cached.getLastAccessedTime().isBefore(Instant.now().minus(revalidateAfter))) {
+      return cached.createView();
     }
 
-    return cached.createView();
+    // re-validate if not accessed within the configured period
+    if (logger.isTraceEnabled())
+      logger.trace("Revalidating session " + id + " against delegate repository.");
+
+    Session delegate = null;
+    final Instant lastAccessedTime;
+    if (lastAccessedTimeAccessor != null) {
+      // if we can get the lastAccessedTime without loading the session, let's try to be efficient
+      lastAccessedTime = lastAccessedTimeAccessor.getLastAccessedTime(id);
+    } else {
+      delegate = this.delegate.findById(id);
+      lastAccessedTime = delegate != null ? delegate.getLastAccessedTime() : null;
+    }
+
+    // if the delegate repository does not know this session because we have not yet saved it, don't remove it
+    if (lastAccessedTime == null && !cached.delegateAwaitsSave) {
+      if (logger.isTraceEnabled())
+        logger.trace("Delegate session " + id + " is unknown, removing from cache.");
+      sessionCache.remove(id);
+      return null;
+    }
+
+    if (delegate != null && delegate.isExpired()) {
+      if (logger.isTraceEnabled())
+        logger.trace("Delegate session " + id + " is expired, removing from cache.");
+      sessionCache.remove(id);
+      return null;
+    }
+
+    if (lastAccessedTime == null || !lastAccessedTime.isAfter(cached.getLastAccessedTime())) {
+      return cached.createView();
+    }
+
+    // if the delegate session is newer than our cache, we need to evict it
+    if (logger.isDebugEnabled())
+      logger.debug("Cached session " + id + " is newer on the remote, removing from cache.");
+    sessionCache.remove(id);
+
+    if (delegate == null) {
+      delegate = this.delegate.findById(id);
+    }
+    if (delegate == null) {
+      return null;
+    }
+
+    return putCache(delegate).createView();
   }
 
   @Override public void deleteById(String id) {
