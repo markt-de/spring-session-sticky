@@ -117,7 +117,7 @@ public @interface EnableStickyHttpSession {
 	FlushMode flushMode() default FlushMode.ON_SAVE;
 
 	/**
-	 * The cron expression for outdated cache entry cleanup job. By default runs every 5 minutes.
+	 * The cron expression for outdated cache entry cleanup job. By default runs every minute.
 	 * @return the cache cleanup cron expression
 	 */
 	String cacheCleanupCron() default StickyHttpSessionConfiguration.DEFAULT_CACHE_CLEANUP_CRON;

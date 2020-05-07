@@ -163,7 +163,7 @@ public @interface EnableStickyRedisHttpSession {
 	String cleanupCron() default "";
 
 	/**
-	 * The cron expression for outdated cache entry cleanup job. By default runs every 5 minutes.
+	 * The cron expression for outdated cache entry cleanup job. By default runs every minute.
 	 * @return the cache cleanup cron expression
 	 */
 	@AliasFor(annotation = EnableStickyHttpSession.class)

@@ -54,7 +54,7 @@ import org.springframework.util.StringUtils;
 @Configuration(proxyBeanMethods = false)
 public class StickyHttpSessionConfiguration implements ImportAware {
 
-  public static final String DEFAULT_CACHE_CLEANUP_CRON = "0 */5 * * * *";
+  public static final String DEFAULT_CACHE_CLEANUP_CRON = "0 * * * * *";
 
   public static final int DEFAULT_CACHE_CONCURRENCY = 16;
 
