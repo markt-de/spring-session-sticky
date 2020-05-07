@@ -56,7 +56,7 @@ public class StickyHttpSessionConfiguration implements ImportAware {
 
   public static final String DEFAULT_CACHE_CLEANUP_CRON = "0 * * * * *";
 
-  public static final int DEFAULT_CACHE_CONCURRENCY = 16;
+  public static final int DEFAULT_CONCURRENCY = 16;
 
   private ApplicationEventPublisher eventPublisher;
 
@@ -66,7 +66,7 @@ public class StickyHttpSessionConfiguration implements ImportAware {
 
   private String cacheCleanupCron = DEFAULT_CACHE_CLEANUP_CRON;
 
-  private int cacheConcurrency = DEFAULT_CACHE_CONCURRENCY;
+  private int sessionConcurrency = DEFAULT_CONCURRENCY;
 
   private @Nullable Duration revalidateAfter = Duration.ofSeconds(DEFAULT_REVALIDATE_AFTER_SECONDS);
 
@@ -95,8 +95,8 @@ public class StickyHttpSessionConfiguration implements ImportAware {
     this.cacheCleanupCron = cacheCleanupCron;
   }
 
-  public void setCacheConcurrency(int cacheConcurrency) {
-    this.cacheConcurrency = cacheConcurrency;
+  public void setSessionConcurrency(int sessionConcurrency) {
+    this.sessionConcurrency = sessionConcurrency;
   }
 
   public void setRevalidateAfter(@Nullable Duration revalidateAfter) {
@@ -119,7 +119,7 @@ public class StickyHttpSessionConfiguration implements ImportAware {
 
   @Bean
   public StickySessionCache stickySessionCache() {
-    StickySessionCache cache = new StickySessionCache(this.cacheConcurrency);
+    StickySessionCache cache = new StickySessionCache(this.sessionConcurrency);
     cache.setCleanupAfter(this.cleanupAfter);
     return cache;
   }
@@ -131,7 +131,8 @@ public class StickyHttpSessionConfiguration implements ImportAware {
       StickySessionCache stickySessionCache) {
     // if we add a type parameter for the remote Session type, this bean won't get autowired
     // might be solved with https://github.com/spring-projects/spring-framework/issues/24965
-    StickySessionRepository sessionRepository = new StickySessionRepository(stickySessionRepositoryAdapter, stickySessionCache);
+    StickySessionRepository sessionRepository = new StickySessionRepository(stickySessionRepositoryAdapter,
+        stickySessionCache, this.sessionConcurrency);
 
     sessionRepository.setFlushMode(this.flushMode);
     sessionRepository.setSaveMode(this.saveMode);
