@@ -22,7 +22,6 @@ import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.Executor;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -53,7 +52,7 @@ import org.springframework.util.Assert;
  * If configured to {@linkplain #setRevalidateAfter(Duration) revalidate sessions}, the lastAccessTime of the local
  * session's version will be compared against the remote version, and refreshed if stale.
  * <p>
- * If configured to {@linkplain #setAsyncSaveExecutor(Executor) save session asynchronously}, saving of the delegate
+ * If configured to {@linkplain #setDelegateSaveStrategy(DelegateSaveStrategy) save session asynchronously}, saving of the delegate
  * session will be dispatched to the configured executor.
  *
  * @author Bernhard Frauendienst
@@ -76,7 +75,7 @@ public final class StickySessionRepository
   private ApplicationEventPublisher eventPublisher = event -> {
   };
 
-  private @Nullable Executor asyncSaveExecutor = null;
+  private DelegateSaveStrategy delegateSaveStrategy = new SynchronousDelegateSaveStrategy();
 
   private @Nullable Duration revalidateAfter = Duration.ofMinutes(DEFAULT_REVALIDATE_AFTER_SECONDS);
 
@@ -106,13 +105,20 @@ public final class StickySessionRepository
   }
 
   /**
-   * If set to a non-null value, sessions will be saved to the remote repository in an asynchronous fashion using
-   * the given executor.
+   * Sessions will be saved to the remote repository by the given strategy.
    *
-   * @param asyncSaveExecutor the executor to save delegate sessions with, or {@code null} to disable async saving.
+   * Common configurations are a {@link AsyncDelegateSaveStrategy} with a fixed thread pool, or a
+   * {@link DelayedDelegateSaveStrategy} that delays the save to aggregate multiple updates in a
+   * single operation.
+   *
+   * The default is a {@link SynchronousDelegateSaveStrategy}, which effectively disables asynchronous
+   * saving of delegate sessions.
+   *
+   * @param delegateSaveStrategy the strategy to save delegate sessions with
    */
-  public void setAsyncSaveExecutor(@Nullable Executor asyncSaveExecutor) {
-    this.asyncSaveExecutor = asyncSaveExecutor;
+  public void setDelegateSaveStrategy(DelegateSaveStrategy delegateSaveStrategy) {
+    Assert.notNull(delegateSaveStrategy, "delegateSaveStrategy cannot be null");
+    this.delegateSaveStrategy = delegateSaveStrategy;
   }
 
   /**
@@ -310,10 +316,10 @@ public final class StickySessionRepository
 
       delegateAwaitsSave = true;
       // if the session id changes, save to delegate session immediately
-      if (asyncSaveExecutor != null && changedIdDelegate == null) {
-        asyncSaveExecutor.execute(this::saveDelegate);
-      } else {
+      if (changedIdDelegate != null) {
         this.saveDelegate();
+      } else {
+        delegateSaveStrategy.queueSaveDelegate(this::saveDelegate);
       }
     }
 

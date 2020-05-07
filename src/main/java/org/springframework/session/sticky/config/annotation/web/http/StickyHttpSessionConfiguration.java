@@ -22,6 +22,7 @@ import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
@@ -38,9 +39,13 @@ import org.springframework.scheduling.config.ScheduledTaskRegistrar;
 import org.springframework.session.FlushMode;
 import org.springframework.session.SaveMode;
 import org.springframework.session.SessionRepository;
+import org.springframework.session.sticky.AsyncDelegateSaveStrategy;
+import org.springframework.session.sticky.DelayedDelegateSaveStrategy;
+import org.springframework.session.sticky.DelegateSaveStrategy;
 import org.springframework.session.sticky.StickySessionCache;
 import org.springframework.session.sticky.StickySessionRepository;
 import org.springframework.session.sticky.StickySessionRepositoryAdapter;
+import org.springframework.session.sticky.SynchronousDelegateSaveStrategy;
 import org.springframework.util.Assert;
 import org.springframework.util.StringUtils;
 
@@ -58,6 +63,8 @@ public class StickyHttpSessionConfiguration implements ImportAware {
 
   public static final int DEFAULT_CONCURRENCY = 16;
 
+  public static final int DEFAULT_ASYNC_SAVE_THREADS = 16;
+
   private ApplicationEventPublisher eventPublisher;
 
   private FlushMode flushMode = FlushMode.ON_SAVE;
@@ -72,9 +79,9 @@ public class StickyHttpSessionConfiguration implements ImportAware {
 
   private Duration cleanupAfter = Duration.ofMinutes(DEFAULT_CLEANUP_AFTER_MINUTES);
 
-  private @Nullable Executor asyncSaveExecutor;
+  private @Nullable Duration delaySaves = null;
 
-  private boolean asyncSaveExecutorConfigured = false;
+  private int asyncSaveThreads = DEFAULT_ASYNC_SAVE_THREADS;
 
   @Autowired
   public void setApplicationEventPublisher(ApplicationEventPublisher applicationEventPublisher) {
@@ -108,13 +115,25 @@ public class StickyHttpSessionConfiguration implements ImportAware {
     this.cleanupAfter = cleanupAfter;
   }
 
-  public void setAsyncSaveExecutor(@Nullable Executor asyncSaveExecutor) {
-    this.asyncSaveExecutor = asyncSaveExecutor;
-    this.asyncSaveExecutorConfigured = true;
+  public void setDelaySaves(@Nullable Duration delaySaves) {
+    this.delaySaves = delaySaves;
   }
 
-  private Executor createDefaultAsyncSaveExecutor() {
-    return Executors.newFixedThreadPool(16);
+  public void setAsyncSaveThreads(int asyncSaveThreads) {
+    this.asyncSaveThreads = asyncSaveThreads >= 0 ? asyncSaveThreads : DEFAULT_ASYNC_SAVE_THREADS;
+  }
+
+  @Bean
+  public DelegateSaveStrategy stickySessionDelegateSaveStrategy() {
+    if (asyncSaveThreads == 0) {
+      return new SynchronousDelegateSaveStrategy();
+    }
+    long delaySavesSeconds = delaySaves == null ? 0 : delaySaves.getSeconds();
+    if (delaySavesSeconds > 0) {
+      return DelayedDelegateSaveStrategy.withScheduledThreadPool(asyncSaveThreads, delaySavesSeconds, TimeUnit.SECONDS);
+    } else {
+      return AsyncDelegateSaveStrategy.withFixedThreadPool(asyncSaveThreads);
+    }
   }
 
   @Bean
@@ -128,7 +147,7 @@ public class StickyHttpSessionConfiguration implements ImportAware {
   @Bean
   public StickySessionRepository stickySessionRepository(
       StickySessionRepositoryAdapter<? extends SessionRepository<?>> stickySessionRepositoryAdapter,
-      StickySessionCache stickySessionCache) {
+      StickySessionCache stickySessionCache, DelegateSaveStrategy stickySessionDelegateSaveStrategy) {
     // if we add a type parameter for the remote Session type, this bean won't get autowired
     // might be solved with https://github.com/spring-projects/spring-framework/issues/24965
     StickySessionRepository sessionRepository = new StickySessionRepository(stickySessionRepositoryAdapter,
@@ -138,11 +157,7 @@ public class StickyHttpSessionConfiguration implements ImportAware {
     sessionRepository.setSaveMode(this.saveMode);
 
     sessionRepository.setApplicationEventPublisher(this.eventPublisher);
-    if (this.asyncSaveExecutorConfigured) {
-      sessionRepository.setAsyncSaveExecutor(this.asyncSaveExecutor);
-    } else {
-      this.asyncSaveExecutor = createDefaultAsyncSaveExecutor();
-    }
+    sessionRepository.setDelegateSaveStrategy(stickySessionDelegateSaveStrategy);
     sessionRepository.setRevalidateAfter(this.revalidateAfter);
     return sessionRepository;
   }
@@ -160,9 +175,13 @@ public class StickyHttpSessionConfiguration implements ImportAware {
       this.cleanupAfter = Duration.ofMinutes(cleanupAfterMinutes);
     }
 
+    int delaySavesSeconds = attributes.getNumber("delaySavesSeconds");
+    if (delaySavesSeconds >= 0) {
+      this.delaySaves = Duration.ofSeconds(delaySavesSeconds);
+    }
     int asyncSaveThreads = attributes.getNumber("asyncSaveThreads");
     if (asyncSaveThreads >= 0) {
-      setAsyncSaveExecutor(asyncSaveThreads > 0 ? Executors.newFixedThreadPool(asyncSaveThreads) : null);
+      this.asyncSaveThreads = asyncSaveThreads;
     }
 
     this.flushMode = attributes.getEnum("flushMode");

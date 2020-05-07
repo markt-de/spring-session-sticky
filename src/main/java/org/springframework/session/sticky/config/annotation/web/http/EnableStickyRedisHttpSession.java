@@ -21,7 +21,6 @@ import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
-import java.util.concurrent.Executor;
 
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
@@ -32,7 +31,6 @@ import org.springframework.session.MapSession;
 import org.springframework.session.SaveMode;
 import org.springframework.session.Session;
 import org.springframework.session.SessionRepository;
-import org.springframework.session.config.annotation.web.http.EnableSpringHttpSession;
 import org.springframework.session.data.redis.RedisIndexedSessionRepository;
 import org.springframework.session.data.redis.config.annotation.web.http.EnableRedisHttpSession;
 import org.springframework.session.sticky.StickySessionCache;
@@ -106,9 +104,25 @@ public @interface EnableStickyRedisHttpSession {
 	int cleanupAfterMinutes() default StickySessionCache.DEFAULT_CLEANUP_AFTER_MINUTES;
 
 	/**
-	 * If set to a positive value, a {@linkplain java.util.concurrent.Executors#newFixedThreadPool(int) fixed thread pool}
-	 * of that size will be configured for
-	 * {@linkplain StickySessionRepository#setAsyncSaveExecutor(Executor) asynchronous saving.
+	 * Aggregate multiple updates to the session before saving to the remote store.
+	 *
+	 * By default, no delay is configured and sessions are queued for saving immediately.
+	 *
+	 * Only applicable if {@link #asyncSaveThreads()} is set to a non-zero number.
+	 *
+	 * @return the number of seconds to delay updates to the remote store.
+	 */
+	@AliasFor(annotation = EnableStickyHttpSession.class)
+	int delaySavesSeconds() default 0;
+
+	/**
+	 * If set to a positive value, an asynchronous
+	 * {@linkplain StickySessionRepository#setDelegateSaveStrategy(org.springframework.session.sticky.DelegateSaveStrategy)
+	 * delegate save strategy} will be configured for saving delegate sessions to the remote store.
+	 *
+	 * Depending on the value of {@link #delaySavesSeconds()}, a {@link org.springframework.session.sticky.DelayedDelegateSaveStrategy}
+	 * (for values > 0) or a {@link org.springframework.session.sticky.AsyncDelegateSaveStrategy} (for 0)
+	 * is configured.
 	 *
 	 * If set to zero, no executor will be configured (sessions will be saved to the remote store synchronously).
 	 *
@@ -116,7 +130,7 @@ public @interface EnableStickyRedisHttpSession {
 	 * @return
 	 */
 	@AliasFor(annotation = EnableStickyHttpSession.class)
-	int asyncSaveThreads() default -1;
+	int asyncSaveThreads() default StickyHttpSessionConfiguration.DEFAULT_ASYNC_SAVE_THREADS;
 
 	/**
 	 * Defines a unique namespace for keys. The value is used to isolate sessions by
