@@ -90,20 +90,29 @@ public class StickySessionCache {
     cacheCleanup.cleanup();
   }
 
-  private static class CleanupEntry<E> {
+  private static class CleanupEntry<E extends CacheEntry> implements Comparable<CleanupEntry<E>> {
     final WeakReference<E> session;
 
     final Instant scheduledCleanup;
 
+    final String sessionId;
+
     public CleanupEntry(E session, Instant scheduledCleanup) {
       this.session = new WeakReference<>(session);
+      this.sessionId = session.getId();
       this.scheduledCleanup = scheduledCleanup;
+    }
+
+    @Override
+    public int compareTo(CleanupEntry<E> o) {
+      int cmp = this.scheduledCleanup.compareTo(o.scheduledCleanup);
+      return cmp != 0 ? cmp : this.sessionId.compareTo(o.sessionId);
     }
   }
 
   private class CacheCleanup<E extends CacheEntry> {
 
-    private final SortedSet<CleanupEntry<E>> scheduledEntries = new ConcurrentSkipListSet<>(comparing(it -> it.scheduledCleanup));
+    private final SortedSet<CleanupEntry<E>> scheduledEntries = new ConcurrentSkipListSet<>();
 
     void schedule(E entry) {
       CleanupEntry<E> cleanupEntry = new CleanupEntry<>(entry, entry.getLastAccessedTime().plus(cleanupAfter));
