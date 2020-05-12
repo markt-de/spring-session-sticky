@@ -230,9 +230,10 @@ public final class StickySessionRepository
         return cached.createView();
       }
 
-      // if the delegate session is newer than our cache, we need to evict it
+      // the delegate session is newer than our cache, we need to evict it
       if (logger.isDebugEnabled())
-        logger.debug("Cached session " + id + " is newer on the remote, removing from cache.");
+        logger.debug("Cached session " + id + " is newer on the remote (" + lastAccessedTime + " > " + cached
+            .getLastAccessedTime() + "), removing from cache.");
       sessionCache.remove(id);
 
       if (delegate == null) {
