@@ -457,7 +457,7 @@ public final class StickySessionRepository
       return this.cached.getAttributeNames();
     }
 
-    @Override public void setAttribute(String attributeName, Object attributeValue) {
+    @Override public void setAttribute(String attributeName, @Nullable Object attributeValue) {
       this.cached.setAttribute(attributeName, attributeValue);
       this.delta.put(attributeName, attributeValue);
       flushImmediateIfNecessary();
