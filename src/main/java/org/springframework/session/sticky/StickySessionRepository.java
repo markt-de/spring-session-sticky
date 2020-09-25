@@ -77,7 +77,7 @@ public final class StickySessionRepository
 
   private DelegateSaveStrategy delegateSaveStrategy = new SynchronousDelegateSaveStrategy();
 
-  private @Nullable Duration revalidateAfter = Duration.ofMinutes(DEFAULT_REVALIDATE_AFTER_SECONDS);
+  private @Nullable Duration revalidateAfter = Duration.ofSeconds(DEFAULT_REVALIDATE_AFTER_SECONDS);
 
   private FlushMode flushMode = FlushMode.ON_SAVE;
 

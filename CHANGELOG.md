@@ -6,6 +6,9 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixes
+- Fix default value of revalidateAfter being 30 minutes instead of 30 seconds
+
 ## 0.2.0 - 2020-05-12
 Initial public release
 
