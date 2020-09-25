@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.3.0] - 2020-09-25
+This version includes small bugfixes and dependency udpates
 
 ### Changed
 - Update to spring-session Dragonfruit-SR1
@@ -16,4 +18,5 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 ## 0.2.0 - 2020-05-12
 Initial public release
 
-[Unreleased]: https://github.com/markt-de/spring-session-sticky/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/markt-de/spring-session-sticky/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/markt-de/spring-session-sticky/compare/v0.2.0...v0.3.0
