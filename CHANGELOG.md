@@ -6,6 +6,10 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+
+### Changed
+- Update to spring-session Dragonfruit-SR1
+
 ### Fixes
 - Fix default value of revalidateAfter being 30 minutes instead of 30 seconds
 
