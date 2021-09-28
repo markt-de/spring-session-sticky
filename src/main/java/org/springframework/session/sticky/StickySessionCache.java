@@ -26,6 +26,7 @@ import java.util.concurrent.ConcurrentSkipListSet;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.context.SmartLifecycle;
 import org.springframework.lang.Nullable;
 import org.springframework.session.Session;
 import org.springframework.session.events.SessionDestroyedEvent;
@@ -35,7 +36,7 @@ import org.springframework.util.Assert;
 /**
  * @author Bernhard Frauendienst
  */
-public class StickySessionCache {
+public class StickySessionCache implements SmartLifecycle {
 
   private static final Log logger = LogFactory.getLog(StickySessionRepository.class);
 
@@ -49,6 +50,22 @@ public class StickySessionCache {
 
   private ApplicationEventPublisher eventPublisher = event -> {
   };
+
+  @Override
+  public void start() {
+
+  }
+
+  @Override
+  public void stop() {
+    // ensure to flush all sessions from the cache upon shutdown
+    cacheCleanup.clearAll();
+  }
+
+  @Override
+  public boolean isRunning() {
+    return sessions.isEmpty();
+  }
 
   public StickySessionCache(int cacheConcurrency) {
     this.sessions = new ConcurrentHashMap<>(16, 0.75F, cacheConcurrency);
@@ -97,7 +114,7 @@ public class StickySessionCache {
    * This does not delete sessions, it just removes them from the local cache.
    */
   public void cleanupOutdatedCacheEntries() {
-    cacheCleanup.cleanup();
+    cacheCleanup.cleanup(cleanupAfter);
   }
 
   private static class CleanupEntry<E extends CacheEntry> implements Comparable<CleanupEntry<E>> {
@@ -135,7 +152,7 @@ public class StickySessionCache {
       scheduledEntries.remove(entry);
     }
 
-    void cleanup() {
+    void cleanup(Duration cleanupAfter) {
       Instant now = Instant.now();
       Instant maxLastAccessed = now.minus(cleanupAfter);
       for (CleanupEntry<E> entry : scheduledEntries) {
@@ -156,6 +173,17 @@ public class StickySessionCache {
         } else {
           schedule(session);
         }
+      }
+    }
+
+    void clearAll() {
+      for (CleanupEntry<E> entry : scheduledEntries) {
+        remove(entry);
+        E session = entry.session.get();
+        if (session == null) {
+          continue;
+        }
+        StickySessionCache.this.remove(session.getId());
       }
     }
   }
