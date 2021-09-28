@@ -20,8 +20,6 @@ import static org.springframework.session.sticky.StickySessionRepository.DEFAULT
 
 import java.time.Duration;
 import java.util.Map;
-import java.util.concurrent.Executor;
-import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 import org.springframework.beans.factory.annotation.Autowired;
@@ -140,6 +138,7 @@ public class StickyHttpSessionConfiguration implements ImportAware {
   public StickySessionCache stickySessionCache() {
     StickySessionCache cache = new StickySessionCache(this.sessionConcurrency);
     cache.setCleanupAfter(this.cleanupAfter);
+    cache.setApplicationEventPublisher(this.eventPublisher);
     return cache;
   }
 

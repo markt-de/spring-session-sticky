@@ -15,8 +15,6 @@
  */
 package org.springframework.session.sticky;
 
-import static java.util.Comparator.comparing;
-
 import java.lang.ref.WeakReference;
 import java.time.Duration;
 import java.time.Instant;
@@ -27,7 +25,10 @@ import java.util.concurrent.ConcurrentSkipListSet;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.lang.Nullable;
+import org.springframework.session.Session;
+import org.springframework.session.events.SessionDestroyedEvent;
 import org.springframework.session.sticky.StickySessionRepository.CacheEntry;
 import org.springframework.util.Assert;
 
@@ -46,8 +47,15 @@ public class StickySessionCache {
 
   protected Duration cleanupAfter = Duration.ofMinutes(DEFAULT_CLEANUP_AFTER_MINUTES);
 
+  private ApplicationEventPublisher eventPublisher = event -> {
+  };
+
   public StickySessionCache(int cacheConcurrency) {
     this.sessions = new ConcurrentHashMap<>(16, 0.75F, cacheConcurrency);
+  }
+
+  public void setApplicationEventPublisher(ApplicationEventPublisher eventPublisher) {
+    this.eventPublisher = eventPublisher;
   }
 
   /**
@@ -76,9 +84,11 @@ public class StickySessionCache {
 
   @Nullable
   public void remove(String id) {
-    sessions.remove(id);
+    final CacheEntry cacheEntry = sessions.remove(id);
     // We don't remove from cleanup cache here, because that would require a separate mapping of session ids.
     // The weak reference will be cleared, and the cleanup entry will simply be skipped when it's due.
+
+    eventPublisher.publishEvent(new LocalSessionDestroyedEvent(this, cacheEntry.createView()));
   }
 
   /**
@@ -142,7 +152,7 @@ public class StickySessionCache {
         if (session.getLastAccessedTime().isBefore(maxLastAccessed)) {
           if (logger.isDebugEnabled())
             logger.debug("Cached session " + session.getId() + " is scheduled for cleanup, removing from cache.");
-          sessions.remove(session.getId());
+          StickySessionCache.this.remove(session.getId());
         } else {
           schedule(session);
         }
@@ -150,4 +160,9 @@ public class StickySessionCache {
     }
   }
 
+  public static class LocalSessionDestroyedEvent extends SessionDestroyedEvent {
+    private LocalSessionDestroyedEvent(Object source, Session session) {
+      super(source, session);
+    }
+  }
 }

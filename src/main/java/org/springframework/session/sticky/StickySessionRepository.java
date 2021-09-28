@@ -15,8 +15,6 @@
  */
 package org.springframework.session.sticky;
 
-import static java.util.Comparator.comparing;
-
 import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
@@ -339,7 +337,7 @@ public final class StickySessionRepository
       delegateAwaitsSave = false;
     }
 
-    private synchronized StickySession createView() {
+    synchronized StickySession createView() {
       if (logger.isTraceEnabled())
         logger.trace("Creating new session view for " + getId());
       return new StickySession(this, new MapSession(cached));
