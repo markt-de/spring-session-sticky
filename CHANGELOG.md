@@ -6,6 +6,9 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.0] - 2021-09-28
+- Publish event when local session is removed/expired
+
 ## [0.3.0] - 2020-09-25
 This version includes small bugfixes and dependency udpates
 
