@@ -53,7 +53,6 @@ public class StickySessionCache implements SmartLifecycle {
 
   @Override
   public void start() {
-
   }
 
   @Override
@@ -65,7 +64,7 @@ public class StickySessionCache implements SmartLifecycle {
 
   @Override
   public boolean isRunning() {
-    return sessions.isEmpty();
+    return !sessions.isEmpty();
   }
 
   public StickySessionCache(int cacheConcurrency) {
@@ -184,9 +183,7 @@ public class StickySessionCache implements SmartLifecycle {
         if (session == null) {
           continue;
         }
-        final String sessionId = session.getId();
-        logger.info("Flushing session: " + sessionId);
-        StickySessionCache.this.remove(sessionId);
+        StickySessionCache.this.remove(session.getId());
       }
     }
   }
