@@ -18,18 +18,19 @@ package org.springframework.session.sticky;
 import java.lang.ref.WeakReference;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.SortedSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListSet;
+import java.util.function.Consumer;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.SmartLifecycle;
 import org.springframework.lang.Nullable;
 import org.springframework.session.Session;
-import org.springframework.session.events.SessionDestroyedEvent;
 import org.springframework.session.sticky.StickySessionRepository.CacheEntry;
 import org.springframework.util.Assert;
 
@@ -48,8 +49,11 @@ public class StickySessionCache implements SmartLifecycle {
 
   protected Duration cleanupAfter = Duration.ofMinutes(DEFAULT_CLEANUP_AFTER_MINUTES);
 
-  private ApplicationEventPublisher eventPublisher = event -> {
-  };
+  private final List<Consumer<Session>> sessionDestructionListeners = new ArrayList<>();
+
+  public void registerSessionDestructionListener(Consumer<Session> listener) {
+    sessionDestructionListeners.add(listener);
+  }
 
   @Override
   public void start() {
@@ -69,10 +73,6 @@ public class StickySessionCache implements SmartLifecycle {
 
   public StickySessionCache(int cacheConcurrency) {
     this.sessions = new ConcurrentHashMap<>(16, 0.75F, cacheConcurrency);
-  }
-
-  public void setApplicationEventPublisher(ApplicationEventPublisher eventPublisher) {
-    this.eventPublisher = eventPublisher;
   }
 
   /**
@@ -105,7 +105,7 @@ public class StickySessionCache implements SmartLifecycle {
     // We don't remove from cleanup cache here, because that would require a separate mapping of session ids.
     // The weak reference will be cleared, and the cleanup entry will simply be skipped when it's due.
 
-    eventPublisher.publishEvent(new LocalSessionDestroyedEvent(this, cacheEntry.createView()));
+    sessionDestructionListeners.forEach(listener -> listener.accept(cacheEntry.createView()));
   }
 
   /**
@@ -185,12 +185,6 @@ public class StickySessionCache implements SmartLifecycle {
         }
         StickySessionCache.this.remove(session.getId());
       }
-    }
-  }
-
-  public static class LocalSessionDestroyedEvent extends SessionDestroyedEvent {
-    private LocalSessionDestroyedEvent(Object source, Session session) {
-      super(source, session);
     }
   }
 }

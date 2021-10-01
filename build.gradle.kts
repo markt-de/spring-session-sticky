@@ -1,4 +1,4 @@
-import java.time.LocalDate
+import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 
 plugins {
@@ -41,7 +41,7 @@ publishing {
 val isSnapshot = project.version.toString().endsWith("-SNAPSHOT")
 
 if (isSnapshot) {
-  version = "${project.version.toString().removeSuffix("-SNAPSHOT")}-${LocalDate.now().format(DateTimeFormatter.BASIC_ISO_DATE)}"
+  version = "${project.version.toString().removeSuffix("-SNAPSHOT")}-${LocalDateTime.now().format(DateTimeFormatter.ISO_DATE_TIME)}"
 }
 
 val bintray_user: String? by project

@@ -138,7 +138,6 @@ public class StickyHttpSessionConfiguration implements ImportAware {
   public StickySessionCache stickySessionCache() {
     StickySessionCache cache = new StickySessionCache(this.sessionConcurrency);
     cache.setCleanupAfter(this.cleanupAfter);
-    cache.setApplicationEventPublisher(this.eventPublisher);
     return cache;
   }
 
