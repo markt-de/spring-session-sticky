@@ -59,6 +59,7 @@ public class StickySessionCache implements SmartLifecycle {
   @Override
   public void stop() {
     // ensure to flush all sessions from the cache upon shutdown
+    logger.info("Received stop event, flushing all sessions.");
     cacheCleanup.clearAll();
   }
 
@@ -183,7 +184,9 @@ public class StickySessionCache implements SmartLifecycle {
         if (session == null) {
           continue;
         }
-        StickySessionCache.this.remove(session.getId());
+        final String sessionId = session.getId();
+        logger.info("Flushing session: " + sessionId);
+        StickySessionCache.this.remove(sessionId);
       }
     }
   }
