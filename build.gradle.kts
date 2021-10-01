@@ -9,7 +9,7 @@ plugins {
 }
 
 group = "de.classyfi.libs"
-version = "0.5.0-SNAPSHOT"
+version = "0.5.0"
 
 java {
   sourceCompatibility = JavaVersion.VERSION_1_8
