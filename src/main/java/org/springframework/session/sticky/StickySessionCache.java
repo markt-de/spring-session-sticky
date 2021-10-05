@@ -105,7 +105,9 @@ public class StickySessionCache implements SmartLifecycle {
     // We don't remove from cleanup cache here, because that would require a separate mapping of session ids.
     // The weak reference will be cleared, and the cleanup entry will simply be skipped when it's due.
 
-    sessionDestructionListeners.forEach(listener -> listener.accept(cacheEntry.createView()));
+    if (cacheEntry != null) {
+      sessionDestructionListeners.forEach(listener -> listener.accept(cacheEntry.createView()));
+    }
   }
 
   /**
