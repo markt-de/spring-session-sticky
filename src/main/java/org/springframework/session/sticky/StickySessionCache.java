@@ -39,7 +39,7 @@ import org.springframework.util.Assert;
  */
 public class StickySessionCache implements SmartLifecycle {
 
-  private static final Log logger = LogFactory.getLog(StickySessionRepository.class);
+  private static final Log logger = LogFactory.getLog(StickySessionCache.class);
 
   public static final int DEFAULT_CLEANUP_AFTER_MINUTES = 20;
 
@@ -63,7 +63,7 @@ public class StickySessionCache implements SmartLifecycle {
   public void stop() {
     // ensure to flush all sessions from the cache upon shutdown
     logger.info("Received stop event, flushing all sessions.");
-    cacheCleanup.clearAll();
+    flushAllSessions();
   }
 
   @Override
@@ -115,6 +115,12 @@ public class StickySessionCache implements SmartLifecycle {
    */
   public void cleanupOutdatedCacheEntries() {
     cacheCleanup.cleanup(cleanupAfter);
+  }
+
+  void flushAllSessions() {
+    for (String sessionId : sessions.keySet()) {
+      StickySessionCache.this.remove(sessionId);
+    }
   }
 
   private static class CleanupEntry<E extends CacheEntry> implements Comparable<CleanupEntry<E>> {
@@ -173,17 +179,6 @@ public class StickySessionCache implements SmartLifecycle {
         } else {
           schedule(session);
         }
-      }
-    }
-
-    void clearAll() {
-      for (CleanupEntry<E> entry : scheduledEntries) {
-        remove(entry);
-        E session = entry.session.get();
-        if (session == null) {
-          continue;
-        }
-        StickySessionCache.this.remove(session.getId());
       }
     }
   }
